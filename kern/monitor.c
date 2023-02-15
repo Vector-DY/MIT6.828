@@ -25,6 +25,7 @@ struct Command {
 static struct Command commands[] = {
 	{ "help", "Display this list of commands", mon_help },
 	{ "kerninfo", "Display information about the kernel", mon_kerninfo },
+	{ "backtrace", "Display backtrace information",mon_backtrace},
 };
 
 /***** Implementations of basic kernel monitor commands *****/
@@ -58,7 +59,38 @@ mon_kerninfo(int argc, char **argv, struct Trapframe *tf)
 int
 mon_backtrace(int argc, char **argv, struct Trapframe *tf)
 {
+	typedef int (*this_func_type)(int, char **, struct Trapframe *);
 	// Your code here.
+		uint32_t ebp = read_ebp();
+		int *ebp_base_ptr = (int *)ebp;           // extract stack base
+		uint32_t eip = ebp_base_ptr[1];   // extract just above this stack
+		while (1) {
+			cprintf("ebp %x, eip %x, args ", ebp, eip);
+
+			int *args = ebp_base_ptr + 2;
+
+			for (int i = 0; i < 5; ++i) {
+				cprintf("%x ", args[i]);
+			}
+			cprintf("\n");
+
+			// read debug information
+			struct Eipdebuginfo info;
+			int ret = debuginfo_eip(eip, &info);
+			cprintf("    %s: %d: %.*s+%d\n",
+					info.eip_file, info.eip_line, info.eip_fn_namelen, info.eip_fn_name, eip - info.eip_fn_addr);
+
+			// 判断是否到达call stack顶部
+			if (ret) {
+				break;
+			}
+
+			// update values
+			ebp = *ebp_base_ptr;
+			ebp_base_ptr = (int*)ebp;
+			eip = ebp_base_ptr[1];
+		}
+
 	return 0;
 }
 

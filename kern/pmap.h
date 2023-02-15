@@ -76,14 +76,14 @@ static inline struct PageInfo*
 pa2page(physaddr_t pa)
 {
 	if (PGNUM(pa) >= npages)
-		panic("pa2page called with invalid pa");
+		panic("pa2page called with invalid pa");  //Get the Page struct whose physical address is 'pa 
 	return &pages[PGNUM(pa)];
 }
 
 static inline void*
 page2kva(struct PageInfo *pp)
 {
-	return KADDR(page2pa(pp));
+	return KADDR(page2pa(pp));     // return virtual address of pageinfo
 }
 
 pte_t *pgdir_walk(pde_t *pgdir, const void *va, int create);
