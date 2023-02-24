@@ -14,10 +14,6 @@
 static void
 pgfault(struct UTrapframe *utf)
 {
-	void *addr = (void *) utf->utf_fault_va;
-	uint32_t err = utf->utf_err;
-	int r;
-
 	// Check that the faulting access was (1) a write, and (2) to a
 	// copy-on-write page.  If not, panic.
 	// Hint:
@@ -25,7 +21,20 @@ pgfault(struct UTrapframe *utf)
 	//   (see <inc/memlayout.h>).
 
 	// LAB 4: Your code here.
-
+    uint32_t err = utf->utf_err;
+    uint32_t addr = utf->utf_fault_va;
+    int cur_proc = sys_getenvid(),result;
+    if(!(err & FEC_WR) && (uvpt[PGNUM(addr)] & PTE_COW)) {
+        /*
+            根据lab网页中里面说的,pgfault()如果不是因为写入一个PTE_COW的page而引发的错误的话，就panic
+            所以前面 !,取反
+            PGNUM这个宏的作用是根据给出的虚拟地址获得，来获得他是第几个页表项,具体的意思看一下注释就可以
+            uvpt[]这个数组定义在memlayout.h中，它的作用是获得page table entry,注释里面说到
+            第N个page table entry就是uvpt[N],这样一来两者就可以很好的结合了。获得page table entry我们就可以判断
+            是不是PTE_COW
+        */
+        panic("pgfault():the fault is neither caused by write nor accessed the page that marked PTE_COW\n");
+    }
 	// Allocate a new page, map it at a temporary location (PFTEMP),
 	// copy the data from the old page to the new page, then move the new
 	// page to the old page's address.
@@ -33,8 +42,27 @@ pgfault(struct UTrapframe *utf)
 	//   You should make three system calls.
 
 	// LAB 4: Your code here.
-
-	panic("pgfault not implemented");
+	result = sys_page_alloc(cur_proc,(void*)PFTEMP,PTE_U | PTE_W | PTE_P);
+    if(result < 0) {
+        panic("pgfault():allocating page for temporary location of current running process failed\n");
+    } 
+    //为暂时的地址分配页后，将造成page fault的地址对应的内容复制到临时地址去
+    memcpy(PFTEMP,(const void*)ROUNDDOWN(addr,PGSIZE),PGSIZE);
+ 
+    //这里要做的就是将虚拟地址以及引起错误的地址映射到相同的地方去，sys_page_map()函数完成的就是做这件事
+    //另外，我们要让page是read/write的
+    result = sys_page_map(cur_proc,(void *)PFTEMP,cur_proc,(void*)ROUNDDOWN(addr,PGSIZE),PTE_U | PTE_W | PTE_P);
+    if(result < 0) {
+        panic ("pgfault():mapping failed\n");
+    }
+ 
+    //然后，这个虚拟地址我们未来还是要用的，所以很自然地，我们需要取消mapping
+    result = sys_page_unmap(cur_proc,PFTEMP);
+    if (result < 0)
+    {
+        panic("pgfault():unmap virtual address PFTEMP failed\n");
+    }
+	//panic("pgfault not implemented");
 }
 
 //
@@ -51,11 +79,40 @@ pgfault(struct UTrapframe *utf)
 static int
 duppage(envid_t envid, unsigned pn)
 {
-	int r;
-
+	
 	// LAB 4: Your code here.
-	panic("duppage not implemented");
-	return 0;
+	int result;
+	void* addr = (void *)(pn * PGSIZE);
+	envid_t cur_proc = sys_getenvid();
+	if(uvpt[pn] & PTE_COW || uvpt[pn] & PTE_W) {
+        /*
+        这里的逻辑是:一开始,我们的父进程中肯定有一部分的内存是可写入的,比如说栈.
+        当我们创建子进程后,这一块内存对应的物理页不再是父进程独有了.所以原来在父进程中writable的page
+        都要被标记为copy-on-write.
+        于是,下面的代码就非常好解释了.
+        */
+ 
+        //将父进程中addr对应的映射关系复制到envid(子进程)去,并且标记为copy-on-write
+        result = sys_page_map(cur_proc,addr,envid,addr,PTE_COW | PTE_U | PTE_P);
+        if(result < 0) {
+            panic("duppage():fail to map the copy-on-write into address space of the child\n");
+        }
+        //父进程中可写入的页不再是它独有了,所以也要在父进程中标记为copy-on-wirte
+        result = sys_page_map(cur_proc,addr,cur_proc,addr,PTE_COW | PTE_U | PTE_P);
+        if(result < 0) {
+            panic("duppage():fail to remap page copy-on-write in parent address space\n");
+        }
+    } else {
+        //如果不是writeable的,那么简单了,直接复制就行
+        result = sys_page_map(cur_proc,addr,envid,addr,PTE_U | PTE_P);
+        if (result < 0)
+        {
+            panic("duppage():fail to copy mapping at addr of parent's address space to child\n");
+        }
+ 
+    }
+    return 0;
+	//panic("duppage not implemented");
 }
 
 //
@@ -78,7 +135,45 @@ envid_t
 fork(void)
 {
 	// LAB 4: Your code here.
-	panic("fork not implemented");
+	set_pgfault_handler(pgfault);
+    envid_t child = sys_exofork();
+    uint32_t addr;
+    int result;
+ 
+    if(child < 0 ) 
+        panic("fork():failed to create child process");
+    if(child == 0) {
+        /*
+            至于为什么会有两个不同的返回值，已经讲过了。这里我们需要修改thisenv,
+            因为这个代码是会在父进程和子进程中分别执行的，所以thisenv会代表不同的进程。
+        */
+        thisenv = &envs[ENVX(sys_getenvid())];
+        return 0;
+    }
+ 
+    for(addr = 0; addr < USTACKTOP; addr += PGSIZE) {
+        //并不是0-USTACKTOP所有的地址内容都要被复制到子子进程当中去，我们只复制PTE_P且PTE_U的
+        if((uvpd[PDX(addr)] & PTE_P) && (uvpt[PGNUM(addr)] & PTE_P) && (uvpt[PGNUM(addr)] & PTE_U))
+            duppage(child,PGNUM(addr));
+    }
+ 
+    //根据页面描述，exception stack不能复制，要重新申请一个page
+    void* stack_addr = (void *)(UXSTACKTOP - PGSIZE);
+    int perm = PTE_W | PTE_U | PTE_P;
+    if((result = sys_page_alloc(child,stack_addr,perm) < 0)) {
+        panic("fork():failed to allocate exception stack for child process");
+    }
+ 
+    //设置子进程的page fault handler
+    extern void _pgfault_upcall();
+    sys_env_set_pgfault_upcall(child, _pgfault_upcall);
+ 
+    //标记子进程为runnable
+    if((result = sys_env_set_status(child,ENV_RUNNABLE))) {
+        panic("sys_env_set_status: %e", result);
+    }
+    return child;
+	//panic("fork not implemented");
 }
 
 // Challenge!
