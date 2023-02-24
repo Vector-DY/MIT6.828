@@ -23,8 +23,32 @@ int32_t
 ipc_recv(envid_t *from_env_store, void *pg, int *perm_store)
 {
 	// LAB 4: Your code here.
-	panic("ipc_recv not implemented");
-	return 0;
+    if(pg == NULL) {
+        // 系统调用中的条件都是要求pg < UTOP,所以传入UTOP就会被视为
+        // no page
+        pg = (void*)UTOP;
+    }
+    int result;
+    result = sys_ipc_recv(pg);
+    if(result < 0) {
+        if(from_env_store != NULL) {
+            *from_env_store = 0;
+        }
+        if(perm_store != NULL) {
+            *perm_store = 0;
+        }
+    }
+ 
+    if(from_env_store != NULL) {
+        *from_env_store = thisenv->env_ipc_from;
+    }
+    if(perm_store != NULL) {
+        *perm_store = thisenv->env_ipc_perm;
+    }
+ 
+    // return the value sent by sender
+    return thisenv->env_ipc_value;
+	//panic("ipc_recv not implemented");
 }
 
 // Send 'val' (and 'pg' with 'perm', if 'pg' is nonnull) to 'toenv'.
@@ -39,7 +63,20 @@ void
 ipc_send(envid_t to_env, uint32_t val, void *pg, int perm)
 {
 	// LAB 4: Your code here.
-	panic("ipc_send not implemented");
+    int result;
+    if(pg == NULL) {
+        //如果不需要以页来发送数据,那么就将pg设置为一个合适的值
+        //让sys_ipc_try_send理解这个不是一个合法的地址
+        //根据sys_ipc_try_send里面的注释,很多条件都需要 < UTOP,那就意味着说如果我们传入UTOP
+        //将会被视为不合法的地址
+        pg = (void*)UTOP;
+    }
+    while((result = sys_ipc_try_send(to_env,val,pg,perm)) == -E_IPC_NOT_RECV);
+    if(result != -E_IPC_NOT_RECV && result < 0) {
+        panic("ipc_send():send message to %d failed",to_env);
+    }
+    sys_yield();
+	//panic("ipc_send not implemented");
 }
 
 // Find the first environment of the given type.  We'll use this to
