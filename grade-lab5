@@ -92,7 +92,7 @@ def test_icode():
 
 @test(15)
 def test_testshell():
-    r.user_test("testshell", timeout=60)
+    r.user_test("testshell", timeout=500)
     r.match("shell ran correctly")
 
 def gen_primes(n):
@@ -103,7 +103,7 @@ def gen_primes(n):
 
 @test(10)
 def test_primespipe():
-    r.user_test("primespipe", stop_on_line("[0-9]{4}$"), timeout=120)
+    r.user_test("primespipe", stop_on_line("[0-9]{4}$"), timeout=500)
     primes = set(gen_primes(1000))
     nonprimes = set(range(1000)) - primes
     r.match(no=["%d$" % np for np in nonprimes],

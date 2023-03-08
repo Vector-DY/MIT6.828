@@ -137,7 +137,20 @@ sys_env_set_trapframe(envid_t envid, struct Trapframe *tf)
 	// LAB 5: Your code here.
 	// Remember to check whether the user has supplied us with a good
 	// address!
-	panic("sys_env_set_trapframe not implemented");
+    struct Env *env;
+    int r;
+    if ( (r = envid2env(envid, &env, 1)) < 0)
+        return r;
+
+    // 什么时候会出现没有权限访问的问题？
+    user_mem_assert(env, tf, sizeof(struct Trapframe), PTE_U);
+    // 直接整个结构体也是可以赋值的
+    env->env_tf = *tf;
+    env->env_tf.tf_cs |= 0x3; 
+    env->env_tf.tf_eflags &=  (~FL_IOPL_MASK);
+    env->env_tf.tf_eflags |= FL_IF;
+    return 0;
+	//panic("sys_env_set_trapframe not implemented");
 }
 
 // Set the page fault upcall for 'envid' by modifying the corresponding struct
